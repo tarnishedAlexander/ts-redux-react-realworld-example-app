@@ -8,8 +8,6 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      # Set the backend API URL for the frontend
-      # Example value: http://your-backend-ec2-ip:3000/api
       REACT_APP_BASE_API_URL: ${{ secrets.BASE_API_URL }}
     steps:
       - name: Checkout code
