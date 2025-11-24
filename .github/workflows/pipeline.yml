@@ -1,4 +1,4 @@
-name: Deploy Fullstack App
+name: Deploy Frontend to EC2
 
 on:
   push:
@@ -8,42 +8,36 @@ jobs:
   deploy:
     runs-on: ubuntu-latest
     env:
-      # Provide the base API URL to the frontend build via env var. Set this secret in your repo: BASE_API_URL
+      # Set the backend API URL for the frontend
+      # Example value: http://your-backend-ec2-ip:3000/api
       REACT_APP_BASE_API_URL: ${{ secrets.BASE_API_URL }}
     steps:
-      - uses: actions/checkout@v4
+      - name: Checkout code
+        uses: actions/checkout@v4
 
-      - uses: actions/setup-node@v4
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
         with:
           node-version: 20
 
-      - name: Build frontend
-        run: |
-          # if your frontend is in a subfolder 'client' change to that directory
-          npm ci
-          npm run build
+      - name: Install dependencies
+        run: npm ci
 
-      - name: Install backend (if any)
-        run: |
-          # if you have a 'server' folder use the below lines (no-op if not present)
-          if [ -d server ]; then
-            cd server
-            npm ci
-          fi
+      - name: Build React frontend
+        run: npm run build
 
-      - name: Deploy to EC2 (copy files)
+      - name: Deploy build to EC2
         uses: appleboy/scp-action@master
         with:
           host: ${{ secrets.EC2_HOST }}
           username: ${{ secrets.EC2_USER }}
           key: ${{ secrets.EC2_KEY }}
-          # copy the build directory and server (if exists) and env files
-          source: "build/*,server/*,server/.*,.env*"
-          target: "~/app"
+          source: "build/*"
+          target: "~/frontend-deploy"
           overwrite: true
-          strip_components: 0
+          strip_components: 1
 
-      - name: Restart app on EC2
+      - name: Update nginx and restart
         uses: appleboy/ssh-action@master
         with:
           host: ${{ secrets.EC2_HOST }}
@@ -51,19 +45,14 @@ jobs:
           key: ${{ secrets.EC2_KEY }}
           script: |
             set -e
-            cd ~/app || exit 0
-            # move .env into server if present
-            [ -f .env ] && [ -d server ] && mv .env server/ || true
-            # install production deps for backend if present
-            if [ -d server ]; then
-              cd server
-              npm ci --production
-              # try restarting with pm2, otherwise start the server (adjust entry if needed)
-              pm2 restart app || pm2 start dist/index.js --name app || pm2 start src/server.ts --name app --interpreter tsx || true
-            fi
-            # Copy frontend static build to nginx/www root if desired
-            if [ -d ../build ]; then
-              sudo cp -r ../build/* /var/www/html/ || true
-            elif [ -d ../client/dist ]; then
-              sudo cp -r ../client/dist/* /var/www/html/ || true
-            fi
+            # Remove old files from nginx web root
+            sudo rm -rf /var/www/html/*
+            # Copy new build files to nginx web root
+            sudo cp -r ~/frontend-deploy/* /var/www/html/
+            # Set proper permissions
+            sudo chown -R www-data:www-data /var/www/html
+            sudo chmod -R 755 /var/www/html
+            # Reload nginx to pick up any changes
+            sudo systemctl reload nginx
+            # Clean up temporary deployment directory
+            rm -rf ~/frontend-deploy
